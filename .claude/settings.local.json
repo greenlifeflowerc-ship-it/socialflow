@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd.exe /c \"flutter pub get\")",
+      "Bash(export PATH=\"$PATH:/c/flutter/bin:/c/Program Files/Git/bin:/c/Users/green/AppData/Local/Programs/Git/bin\")",
+      "Bash(flutter pub *)",
+      "Bash(export PATH=\"/c/flutter/bin/mingit/bin:$PATH:/c/flutter/bin\")",
+      "Bash(export PATH=\"/c/flutter/bin/mingit/cmd:/c/flutter/bin:$PATH\")",
+      "Bash(export PATH=\"/c/flutter/bin/mingit/cmd:/c/flutter/bin:/c/flutter/bin/cache/dart-sdk/bin:$PATH\")",
+      "Bash(dart analyze *)"
+    ]
+  }
+}
