@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
+import '../../../core/l10n/app_strings.dart';
 import '../../../models/media_asset.dart';
 import '../../../services/api_client.dart';
 import '../../../services/settings_service.dart';
@@ -126,8 +127,9 @@ class _SingleEditScreenState extends ConsumerState<SingleEditScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final lang = ref.watch(languageProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Single Image Edit')),
+      appBar: AppBar(title: Text(S.tr('singleImageEdit', lang))),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -141,16 +143,16 @@ class _SingleEditScreenState extends ConsumerState<SingleEditScreen> {
                 ),
               )
             else
-              const Center(child: Text('Please select an image from the library.')),
+              Center(child: Text(S.tr('selectImageFromLibrary', lang))),
             const SizedBox(height: 16),
             TextField(
               controller: _promptController,
               decoration: InputDecoration(
-                labelText: 'Edit Prompt',
+                labelText: S.tr('editPrompt', lang),
                 suffixIcon: IconButton(
                   icon: const Icon(Icons.auto_awesome),
                   onPressed: _generateAutoPrompt,
-                  tooltip: 'Auto Prompt',
+                  tooltip: S.tr('autoPrompt', lang),
                 ),
               ),
               maxLines: 3,
@@ -161,7 +163,7 @@ class _SingleEditScreenState extends ConsumerState<SingleEditScreen> {
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: _aspectRatio,
-                    decoration: const InputDecoration(labelText: 'Aspect Ratio'),
+                    decoration: InputDecoration(labelText: S.tr('aspectRatioLabel', lang)),
                     items: ['Original', '1:1', '4:5', '9:16', '16:9', '3:4'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                     onChanged: (v) => setState(() => _aspectRatio = v!),
                   ),
@@ -170,7 +172,7 @@ class _SingleEditScreenState extends ConsumerState<SingleEditScreen> {
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: _resolution,
-                    decoration: const InputDecoration(labelText: 'Resolution'),
+                    decoration: InputDecoration(labelText: S.tr('resolutionLabel', lang)),
                     items: ['Auto', '1080', '1350', '1920', '2048'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                     onChanged: (v) => setState(() => _resolution = v!),
                   ),
@@ -178,12 +180,12 @@ class _SingleEditScreenState extends ConsumerState<SingleEditScreen> {
               ],
             ),
             SwitchListTile(
-              title: const Text('Preserve Product'),
+              title: Text(S.tr('preserveProduct', lang)),
               value: _preserveProduct,
               onChanged: (v) => setState(() => _preserveProduct = v),
             ),
             SwitchListTile(
-              title: const Text('Preserve Planter'),
+              title: Text(S.tr('preservePlanter', lang)),
               value: _preservePlanter,
               onChanged: (v) => setState(() => _preservePlanter = v),
             ),
@@ -192,7 +194,7 @@ class _SingleEditScreenState extends ConsumerState<SingleEditScreen> {
               width: double.infinity,
               child: ElevatedButton(
                 onPressed: _isProcessing ? null : _startEdit,
-                child: _isProcessing ? const CircularProgressIndicator() : const Text('Start Edit'),
+                child: _isProcessing ? const CircularProgressIndicator() : Text(S.tr('startEdit', lang)),
               ),
             ),
             if (_resultImageUrl != null) ...[
@@ -200,11 +202,11 @@ class _SingleEditScreenState extends ConsumerState<SingleEditScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Result:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text('${S.tr('resultImage', lang)}:', style: const TextStyle(fontWeight: FontWeight.bold)),
                   ElevatedButton.icon(
                     onPressed: _downloadResult,
                     icon: const Icon(Icons.download),
-                    label: const Text('Download to Device'),
+                    label: Text(S.tr('downloadResult', lang)),
                   ),
                 ],
               ),

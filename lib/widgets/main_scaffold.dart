@@ -63,11 +63,7 @@ class MainScaffold extends ConsumerWidget {
               activeIcon: const Icon(Icons.smart_toy),
               label: S.tr('autoReply', lang),
             ),
-            BottomNavigationBarItem(
-              icon: const Icon(Icons.calendar_month_outlined),
-              activeIcon: const Icon(Icons.calendar_month),
-              label: S.tr('calendar', lang),
-            ),
+            // Calendar removed from bottom nav — still accessible from Posts.
             BottomNavigationBarItem(
               icon: const Icon(Icons.settings_outlined),
               activeIcon: const Icon(Icons.settings),
@@ -86,34 +82,19 @@ class MainScaffold extends ConsumerWidget {
     if (location.startsWith('/ai')) return 2;
     if (location.startsWith('/posts')) return 3;
     if (location.startsWith('/auto-reply')) return 4;
-    if (location.startsWith('/calendar')) return 5;
-    if (location.startsWith('/settings')) return 6;
+    // /calendar is not in the bottom nav; keep dashboard selected when on it.
+    if (location.startsWith('/settings')) return 5;
     return 0;
   }
 
   void _onItemTapped(int index, BuildContext context) {
     switch (index) {
-      case 0:
-        context.go('/dashboard');
-        break;
-      case 1:
-        context.go('/media');
-        break;
-      case 2:
-        context.go('/ai');
-        break;
-      case 3:
-        context.go('/posts');
-        break;
-      case 4:
-        context.go('/auto-reply');
-        break;
-      case 5:
-        context.go('/calendar');
-        break;
-      case 6:
-        context.go('/settings');
-        break;
+      case 0: context.go('/dashboard');  break;
+      case 1: context.go('/media');      break;
+      case 2: context.go('/ai');         break;
+      case 3: context.go('/posts');      break;
+      case 4: context.go('/auto-reply'); break;
+      case 5: context.go('/settings');   break;
     }
   }
 }

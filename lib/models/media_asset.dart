@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 
 part 'media_asset.g.dart';
@@ -66,22 +67,37 @@ class MediaAsset extends HiveObject {
   MediaAsset();
 
   factory MediaAsset.fromUploadResponse(Map<String, dynamic> json) {
-    // Check for 'media' object first, then fallback to top-level
-    final mediaData = json['media'] as Map<String, dynamic>? ?? json;
-    
+    // Backend returns: { ok: true, asset: { id, secure_url, media_url, resource_type } }
+    // Also support legacy wrappers: { media: { ... } } or flat { id, url, ... }
+    final mediaData = json['asset'] as Map<String, dynamic>?
+        ?? json['media'] as Map<String, dynamic>?
+        ?? json;
+
+    final backendId   = mediaData['id']?.toString();
+    final secureUrl   = mediaData['secure_url']?.toString();
+    final mediaUrl    = (secureUrl ?? mediaData['media_url'] ?? mediaData['mediaUrl'] ?? mediaData['url'])?.toString();
+    final resourceType = (mediaData['resource_type'] ?? mediaData['mediaType'] ?? mediaData['media_type'])?.toString();
+    final isVideo     = resourceType?.toLowerCase() == 'video';
+
+    debugPrint('UPLOAD RESPONSE: $json');
+    debugPrint('BACKEND MEDIA ASSET ID: $backendId');
+    debugPrint('MEDIA URL: $mediaUrl');
+    debugPrint('RESOURCE TYPE: $resourceType');
+
     return MediaAsset()
-      ..id = mediaData['id']?.toString() ?? 'media_${DateTime.now().millisecondsSinceEpoch}'
-      ..mediaUrl = mediaData['mediaUrl'] ?? mediaData['url'] ?? mediaData['media_url']
-      ..imageUrl = mediaData['imageUrl'] ?? mediaData['image_url']
-      ..videoUrl = mediaData['videoUrl'] ?? mediaData['video_url']
-      ..mediaType = _mediaTypeFromString(mediaData['mediaType'] ?? mediaData['media_type'])
-      ..mimeType = mediaData['mimeType'] ?? mediaData['mime_type']
-      ..caption = mediaData['caption']
-      ..hashtags = (mediaData['hashtags'] as List?)?.map((e) => e.toString()).toList()
-      ..isPublished = mediaData['is_published'] ?? false
-      ..createdAt = DateTime.now()
-      ..uploadedAt = DateTime.now()
-      ..isUploaded = true;
+      // id is the real backend asset ID — never a local placeholder
+      ..id          = backendId ?? 'media_${DateTime.now().millisecondsSinceEpoch}'
+      ..mediaUrl    = mediaUrl
+      ..imageUrl    = isVideo ? (mediaData['imageUrl'] ?? mediaData['image_url'])?.toString() : (secureUrl ?? mediaData['imageUrl'] ?? mediaData['image_url'])?.toString()
+      ..videoUrl    = isVideo ? (secureUrl ?? mediaData['videoUrl'] ?? mediaData['video_url'])?.toString() : (mediaData['videoUrl'] ?? mediaData['video_url'])?.toString()
+      ..mediaType   = _mediaTypeFromString(resourceType)
+      ..mimeType    = (mediaData['mimeType'] ?? mediaData['mime_type'])?.toString()
+      ..caption     = mediaData['caption']?.toString()
+      ..hashtags    = (mediaData['hashtags'] as List?)?.map((e) => e.toString()).toList()
+      ..isPublished = (mediaData['is_published'] as bool?) ?? false
+      ..createdAt   = DateTime.now()
+      ..uploadedAt  = DateTime.now()
+      ..isUploaded  = true;
   }
 
   static MediaType _mediaTypeFromString(String? type) {

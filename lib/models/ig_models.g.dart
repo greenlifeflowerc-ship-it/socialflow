@@ -20,6 +20,8 @@ IgConversation _$IgConversationFromJson(Map<String, dynamic> json) =>
           : DateTime.parse(json['lastMessageAt'] as String),
       unreadCount: (json['unreadCount'] as num?)?.toInt() ?? 0,
       status: json['status'] as String? ?? 'active',
+      rawParticipants: const [], // populated manually in IgConversation.fromJson
+      messages: const [],        // populated manually in IgConversation.fromJson
     );
 
 Map<String, dynamic> _$IgConversationToJson(IgConversation instance) =>
@@ -46,6 +48,7 @@ IgMessage _$IgMessageFromJson(Map<String, dynamic> json) => IgMessage(
       mediaUrl: json['mediaUrl'] as String?,
       sentAt: DateTime.parse(json['sentAt'] as String),
       raw: json['raw'] as Map<String, dynamic>?,
+      fromId: json['fromId'] as String?,
     );
 
 Map<String, dynamic> _$IgMessageToJson(IgMessage instance) => <String, dynamic>{
@@ -58,6 +61,7 @@ Map<String, dynamic> _$IgMessageToJson(IgMessage instance) => <String, dynamic>{
       'mediaUrl': instance.mediaUrl,
       'sentAt': instance.sentAt.toIso8601String(),
       'raw': instance.raw,
+      'fromId': instance.fromId,
     };
 
 IgMediaComment _$IgMediaCommentFromJson(Map<String, dynamic> json) =>

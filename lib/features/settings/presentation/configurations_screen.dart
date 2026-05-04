@@ -1,7 +1,5 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../models/app_settings.dart';
 import '../../../models/ai_model.dart';
 import '../../../services/ai_service.dart';
@@ -12,39 +10,28 @@ class ConfigurationsScreen extends ConsumerStatefulWidget {
   const ConfigurationsScreen({super.key});
 
   @override
-  ConsumerState<ConfigurationsScreen> createState() => _ConfigurationsScreenState();
+  ConsumerState<ConfigurationsScreen> createState() =>
+      _ConfigurationsScreenState();
 }
 
 class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
-  final _supabaseUrlController = TextEditingController();
-  final _supabaseAnonKeyController = TextEditingController();
-  final _apiUrlController = TextEditingController();
   final _apiKeyController = TextEditingController();
 
   bool _isRefreshingModels = false;
   bool _isTestingAi = false;
-  bool _isTestingBackend = false;
 
   @override
   void initState() {
     super.initState();
-    _syncControllersFromState(ref.read(settingsProvider));
+    final settings = ref.read(settingsProvider);
+    _apiKeyController.text =
+        _getApiKeyForProvider(settings, settings.selectedAiProvider);
   }
 
   @override
   void dispose() {
-    _supabaseUrlController.dispose();
-    _supabaseAnonKeyController.dispose();
-    _apiUrlController.dispose();
     _apiKeyController.dispose();
     super.dispose();
-  }
-
-  void _syncControllersFromState(AppSettings settings) {
-    _supabaseUrlController.text = settings.supabaseUrl ?? '';
-    _supabaseAnonKeyController.text = settings.supabaseAnonKey ?? '';
-    _apiUrlController.text = settings.backendUrl ?? '';
-    _apiKeyController.text = _getApiKeyForProvider(settings, settings.selectedAiProvider);
   }
 
   String _getApiKeyForProvider(AppSettings settings, String provider) {
@@ -58,60 +45,6 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
     }
   }
 
-  Future<void> _testBackendConnection(String lang) async {
-    setState(() => _isTestingBackend = true);
-    String url = _apiUrlController.text.trim();
-    if (url.endsWith('/')) url = url.substring(0, url.length - 1);
-    if (url.isEmpty) {
-      _showSnackbar(S.tr('backendUrlRequired', lang), isError: true);
-      setState(() => _isTestingBackend = false);
-      return;
-    }
-
-    final dio = Dio();
-    dio.options.connectTimeout = const Duration(seconds: 10);
-    dio.options.receiveTimeout = const Duration(seconds: 10);
-
-    try {
-      await dio.get('$url/api/health');
-
-      try {
-        final metaResponse = await dio.get('$url/api/meta/test-connection');
-        final data = metaResponse.data as Map<String, dynamic>;
-        final connected = data['ok'] == true || data['connected'] == true;
-        final message = data['message'] as String? ??
-            data['username'] as String? ??
-            (connected ? S.tr('metaConnected', lang) : S.tr('metaDisconnected', lang));
-
-        final settings = ref.read(settingsProvider);
-        ref.read(settingsProvider.notifier).updateState(
-          settings.copyWith(
-            metaConnected: connected,
-            lastMetaMessage: message,
-          ),
-        );
-      } catch (_) {
-        final settings = ref.read(settingsProvider);
-        ref.read(settingsProvider.notifier).updateState(
-          settings.copyWith(
-            metaConnected: false,
-            lastMetaMessage: S.tr('metaDisconnected', lang),
-          ),
-        );
-      }
-
-      _showSnackbar(S.tr('backendConnectedMsg', lang), isError: false);
-    } catch (_) {
-      final settings = ref.read(settingsProvider);
-      ref.read(settingsProvider.notifier).updateState(
-        settings.copyWith(metaConnected: false, lastMetaMessage: S.tr('notTested', lang)),
-      );
-      _showSnackbar(S.tr('backendFailedMsg', lang), isError: true);
-    } finally {
-      if (mounted) setState(() => _isTestingBackend = false);
-    }
-  }
-
   Future<void> _refreshModels(String lang) async {
     setState(() => _isRefreshingModels = true);
     final settings = ref.read(settingsProvider);
@@ -120,24 +53,33 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
     try {
       final response = await aiService.listModels(
         provider: settings.selectedAiProvider,
-        apiKey: _apiKeyController.text.trim(),
+        apiKey: _apiKeyController.text.trim().isEmpty
+            ? null
+            : _apiKeyController.text.trim(),
       );
 
-      final models = (response['models'] as List).map((m) => AiModel.fromJson(m)).toList();
-      final textModels = models.where((m) => m.type == 'text').map((m) => m.id).toList();
-      final imageModels = models.where((m) => m.type == 'image').map((m) => m.id).toList();
+      final models =
+          (response['models'] as List).map((m) => AiModel.fromJson(m)).toList();
+      final textModels =
+          models.where((m) => m.type == 'text').map((m) => m.id).toList();
+      final imageModels =
+          models.where((m) => m.type == 'image').map((m) => m.id).toList();
 
       ref.read(settingsProvider.notifier).updateState(
-        settings.copyWith(
-          availableModels: models,
-          selectedTextModel: textModels.isNotEmpty ? textModels.first : null,
-          selectedImageModel: imageModels.isNotEmpty ? imageModels.first : null,
-          lastModelsRefreshAt: DateTime.now(),
-        ),
-      );
+            settings.copyWith(
+              availableModels: models,
+              selectedTextModel:
+                  textModels.isNotEmpty ? textModels.first : null,
+              selectedImageModel:
+                  imageModels.isNotEmpty ? imageModels.first : null,
+              lastModelsRefreshAt: DateTime.now(),
+            ),
+          );
       _showSnackbar(S.tr('modelsRefreshed', lang), isError: false);
-    } on DioException catch (e) {
-      _showSnackbar('${S.tr('modelsRefreshFailed', lang)}: ${e.message}', isError: true);
+    } catch (e) {
+      final message = e.toString().replaceFirst('Exception: ', '');
+      _showSnackbar('${S.tr('modelsRefreshFailed', lang)}: $message',
+          isError: true);
     } finally {
       if (mounted) setState(() => _isRefreshingModels = false);
     }
@@ -154,13 +96,16 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
 
     try {
       await ref.read(aiServiceProvider).testModel(
-        provider: settings.selectedAiProvider,
-        model: settings.selectedTextModel!,
-        apiKey: _apiKeyController.text.trim(),
-      );
+            provider: settings.selectedAiProvider,
+            model: settings.selectedTextModel!,
+            apiKey: _apiKeyController.text.trim().isEmpty
+                ? null
+                : _apiKeyController.text.trim(),
+          );
       _showSnackbar(S.tr('aiSuccess', lang), isError: false);
-    } on DioException catch (e) {
-      _showSnackbar('${S.tr('aiFailed', lang)}: ${e.message}', isError: true);
+    } catch (e) {
+      final message = e.toString().replaceFirst('Exception: ', '');
+      _showSnackbar('${S.tr('aiFailed', lang)}: $message', isError: true);
     } finally {
       if (mounted) setState(() => _isTestingAi = false);
     }
@@ -169,21 +114,15 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
   Future<void> _saveSettings(String lang) async {
     final notifier = ref.read(settingsProvider.notifier);
     final currentSettings = ref.read(settingsProvider);
-
-    String url = _apiUrlController.text.trim();
-    if (url.endsWith('/')) url = url.substring(0, url.length - 1);
-
     final apiKey = _apiKeyController.text.trim();
     final provider = currentSettings.selectedAiProvider;
 
     await notifier.save(
       currentSettings.copyWith(
-        supabaseUrl: _supabaseUrlController.text.trim(),
-        supabaseAnonKey: _supabaseAnonKeyController.text.trim(),
-        backendUrl: url,
         geminiApiKey: provider == 'gemini' ? apiKey : currentSettings.geminiApiKey,
         openAiApiKey: provider == 'openai' ? apiKey : currentSettings.openAiApiKey,
-        openRouterApiKey: provider == 'openrouter' ? apiKey : currentSettings.openRouterApiKey,
+        openRouterApiKey:
+            provider == 'openrouter' ? apiKey : currentSettings.openRouterApiKey,
       ),
     );
     _showSnackbar(S.tr('settingsSaved', lang), isError: false);
@@ -201,51 +140,16 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
     final settings = ref.watch(settingsProvider);
     final lang = settings.language;
     final textModels = settings.availableModels.where((m) => m.type == 'text').toList();
-    final imageModels = settings.availableModels.where((m) => m.type == 'image').toList();
+    final imageModels =
+        settings.availableModels.where((m) => m.type == 'image').toList();
 
     return Scaffold(
       appBar: AppBar(title: Text(S.tr('configurations', lang))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _buildSubSectionHeader(S.tr('supabase', lang)),
-          _buildTextField(S.tr('supabaseUrl', lang), _supabaseUrlController, hint: 'https://xxxx.supabase.co'),
-          _buildTextField(S.tr('supabaseAnonKey', lang), _supabaseAnonKeyController, obscure: true),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            margin: const EdgeInsets.only(bottom: 16),
-            decoration: BoxDecoration(
-              color: Colors.amber.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.amber.withOpacity(0.3)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.info_outline, color: Colors.amber, size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    S.tr('supabaseRestartNote', lang),
-                    style: const TextStyle(fontSize: 12, color: Colors.amber),
-                  ),
-                ),
-              ],
-            ),
-          ),
 
-          const SizedBox(height: 8),
-
-          _buildSubSectionHeader(S.tr('backend', lang)),
-          _buildTextField(S.tr('backendUrl', lang), _apiUrlController, hint: 'https://your-backend.com'),
-          _buildActionButton(
-            label: S.tr('testBackend', lang),
-            icon: Icons.cloud_done_outlined,
-            isLoading: _isTestingBackend,
-            onPressed: () => _testBackendConnection(lang),
-          ),
-
-          const SizedBox(height: 20),
-
+          // ── AI provider settings ───────────────────────────────────────────
           _buildSubSectionHeader(S.tr('aiProvider', lang)),
           _buildDropdown(
             S.tr('provider', lang),
@@ -255,7 +159,8 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
               if (val != null) {
                 final updated = settings.copyWith(selectedAiProvider: val);
                 ref.read(settingsProvider.notifier).updateState(updated);
-                _apiKeyController.text = _getApiKeyForProvider(settings, val);
+                _apiKeyController.text =
+                    _getApiKeyForProvider(settings, val);
               }
             },
           ),
@@ -263,6 +168,24 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
             '${S.tr('apiKey', lang)} (${settings.selectedAiProvider})',
             _apiKeyController,
             obscure: true,
+          ),
+          // Helper text: tell the user whether their key or the backend key is used
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12.0, left: 4.0),
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _apiKeyController,
+              builder: (context, value, _) {
+                final hasKey = value.text.trim().isNotEmpty;
+                return Text(
+                  hasKey
+                      ? 'Using your Gemini API key.'
+                      : 'Using backend default Gemini key if configured.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: hasKey ? Colors.green : Colors.orange,
+                      ),
+                );
+              },
+            ),
           ),
           _buildActionButton(
             label: S.tr('refreshModels', lang),
@@ -296,9 +219,8 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
 
           const SizedBox(height: 20),
 
+          // ── Sync preferences ───────────────────────────────────────────────
           _buildSubSectionHeader(S.tr('metaIntegration', lang)),
-          _buildMetaStatus(settings, lang),
-          const SizedBox(height: 8),
           SwitchListTile(
             title: Text(S.tr('inboxSync', lang)),
             subtitle: Text(S.tr('inboxSyncSub', lang)),
@@ -319,7 +241,8 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
           const SizedBox(height: 32),
           ElevatedButton(
             onPressed: () => _saveSettings(lang),
-            style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 54)),
+            style: ElevatedButton.styleFrom(
+                minimumSize: const Size(double.infinity, 54)),
             child: Text(S.tr('saveSettings', lang)),
           ),
           const SizedBox(height: 32),
@@ -328,44 +251,6 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
     );
   }
 
-  Widget _buildMetaStatus(AppSettings settings, String lang) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardTheme.color,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: settings.metaConnected
-              ? Colors.green.withOpacity(0.5)
-              : Colors.red.withOpacity(0.5),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            settings.metaConnected ? Icons.check_circle : Icons.error_outline,
-            color: settings.metaConnected ? Colors.green : Colors.red,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  settings.metaConnected ? S.tr('metaConnected', lang) : S.tr('metaDisconnected', lang),
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  settings.lastMetaMessage,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildActionButton({
     required String label,
@@ -428,9 +313,7 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
                   ))
               .toList(),
           onChanged: onChanged,
-          decoration: InputDecoration(
-            labelText: label,
-          ),
+          decoration: InputDecoration(labelText: label),
           isExpanded: true,
         ),
       );
@@ -443,7 +326,8 @@ class _ConfigurationsScreenState extends ConsumerState<ConfigurationsScreen> {
             Text(
               title,
               style: TextStyle(
-                color: Theme.of(context).colorScheme.primary.withOpacity(0.8),
+                color:
+                    Theme.of(context).colorScheme.primary.withOpacity(0.8),
                 fontWeight: FontWeight.bold,
                 fontSize: 14,
                 letterSpacing: 0.5,

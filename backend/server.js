@@ -705,8 +705,113 @@ app.delete("/api/posts/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-// ── AI stub routes ────────────────────────────────────────────────────────────
+// ── AI helper ─────────────────────────────────────────────────────────────────
 
+function getGeminiApiKey(req) {
+  return (
+    req.body?.api_key ||
+    req.headers["x-gemini-api-key"] ||
+    process.env.GEMINI_API_KEY ||
+    ""
+  );
+}
+
+// ── AI routes ─────────────────────────────────────────────────────────────────
+
+// GET /api/ai/models — fetch real Gemini models, user key or backend key
+app.get("/api/ai/models", async (req, res) => {
+  const apiKey = req.headers["x-gemini-api-key"] || process.env.GEMINI_API_KEY || "";
+
+  if (!apiKey) {
+    return res.status(400).json({
+      ok: false,
+      error: "Gemini API key is missing. Add your key or configure GEMINI_API_KEY on the backend."
+    });
+  }
+
+  try {
+    const response = await axios.get(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+    );
+    const models = (response.data.models || [])
+      .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+      .map((m) => ({
+        id: m.name.replace("models/", ""),
+        name: m.displayName || m.name.replace("models/", ""),
+        type: "text"
+      }));
+    res.json({ ok: true, models });
+  } catch (error) {
+    console.error("Fetch Gemini models failed:", error.response?.data || error.message);
+    res.status(500).json({
+      ok: false,
+      error: error.response?.data?.error?.message || error.message,
+      meta: { status: error.response?.status }
+    });
+  }
+});
+
+// POST /api/ai/test — test AI connection, user key or backend key
+app.post("/api/ai/test", async (req, res) => {
+  const apiKey = getGeminiApiKey(req);
+
+  if (!apiKey) {
+    return res.status(400).json({
+      ok: false,
+      error: "Gemini API key is missing. Add your key or configure GEMINI_API_KEY on the backend."
+    });
+  }
+
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const modelName = req.body.model || "gemini-1.5-flash";
+    const model = genAI.getGenerativeModel({ model: modelName });
+    const result = await model.generateContent('Say: connection ok');
+    const text = result.response.text();
+    res.json({ ok: true, message: "AI connection successful", text });
+  } catch (error) {
+    console.error("AI test failed:", error.message);
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+      meta: { status: error.response?.status }
+    });
+  }
+});
+
+// POST /api/ai/generate — generate text, user key or backend key
+app.post("/api/ai/generate", async (req, res) => {
+  const { prompt, model } = req.body;
+  const apiKey = getGeminiApiKey(req);
+
+  if (!prompt) {
+    return res.status(400).json({ ok: false, error: "prompt is required." });
+  }
+
+  if (!apiKey) {
+    return res.status(400).json({
+      ok: false,
+      error: "Gemini API key is missing. Add your key or configure GEMINI_API_KEY on the backend."
+    });
+  }
+
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const geminiModel = genAI.getGenerativeModel({ model: model || "gemini-1.5-flash" });
+    const result = await geminiModel.generateContent(prompt);
+    const text = result.response.text();
+    res.json({ ok: true, text });
+  } catch (error) {
+    console.error("AI generate failed:", error.message);
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+      meta: { status: error.response?.status }
+    });
+  }
+});
+
+// Legacy stub — kept so old clients don't 404
 app.post("/api/ai/list-models", (req, res) => {
   const provider = req.body.provider || "gemini";
   const modelsByProvider = {
@@ -728,11 +833,21 @@ app.post("/api/ai/list-models", (req, res) => {
   res.json({ ok: true, models: modelsByProvider[provider] || [] });
 });
 
+// Legacy stub — kept so old clients don't 404
 app.post("/api/ai/test-model", async (req, res) => {
   try {
-    const { provider, model } = req.body;
+    const { provider, model, api_key } = req.body;
+    const apiKey = api_key || process.env.GEMINI_API_KEY;
     if (provider === "gemini" || !provider) {
-      await generateWithGemini('Reply with exactly: {"ok":true}', model || "gemini-1.5-flash");
+      if (!apiKey) {
+        return res.status(400).json({
+          ok: false,
+          error: "Gemini API key is missing. Add your key or configure GEMINI_API_KEY on the backend."
+        });
+      }
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const m = genAI.getGenerativeModel({ model: model || "gemini-1.5-flash" });
+      await m.generateContent('Reply with exactly: {"ok":true}');
       res.json({ ok: true, message: "Model connection successful." });
     } else {
       res.status(501).json({ ok: false, error: `Provider "${provider}" test not yet implemented.` });
@@ -743,18 +858,33 @@ app.post("/api/ai/test-model", async (req, res) => {
 });
 
 app.post("/api/ai/chat", async (req, res) => {
-  try {
-    const { message, provider, model } = req.body;
-    if (!message) return res.status(400).json({ ok: false, error: "message is required." });
-    if (provider === "gemini" || !provider) {
-      requireGeminiConfig();
-      const text = await generateWithGemini(message, model || "gemini-1.5-flash");
+  const { message, provider, model } = req.body;
+  const apiKey = getGeminiApiKey(req);
+
+  if (!message) {
+    return res.status(400).json({ ok: false, error: "message is required." });
+  }
+
+  if (!apiKey) {
+    return res.status(400).json({
+      ok: false,
+      error: "Gemini API key is missing. Add your key or configure GEMINI_API_KEY on the backend."
+    });
+  }
+
+  if (provider === "gemini" || !provider) {
+    try {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const geminiModel = genAI.getGenerativeModel({ model: model || "gemini-1.5-flash" });
+      const result = await geminiModel.generateContent(message);
+      const text = result.response.text();
       res.json({ ok: true, reply: text });
-    } else {
-      res.status(501).json({ ok: false, error: `Chat provider "${provider}" not yet implemented.` });
+    } catch (error) {
+      console.error("AI chat failed:", error.message);
+      res.status(500).json({ ok: false, error: error.message });
     }
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+  } else {
+    res.status(501).json({ ok: false, error: `Chat provider "${provider}" not yet implemented.` });
   }
 });
 

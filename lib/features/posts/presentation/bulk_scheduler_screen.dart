@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../features/media/presentation/media_library_screen.dart';
 import '../../../models/media_asset.dart';
+import '../../../models/social_account.dart';
+import '../../../services/accounts_service.dart';
 import '../../../services/bulk_scheduler_service.dart';
 import '../../../services/media_service.dart';
 
@@ -22,7 +24,8 @@ class _BulkSchedulerScreenState extends ConsumerState<BulkSchedulerScreen> {
   TimeOfDay _startTime = const TimeOfDay(hour: 9, minute: 0);
   TimeOfDay _endTime = const TimeOfDay(hour: 21, minute: 0);
   CaptionMode _captionMode = CaptionMode.generate_missing;
-  
+  SocialAccount? _selectedAccount;  // ← account whose ID is sent to the backend
+
   // New state variables for advanced captioning
   String _captionPreset = 'Luxury Product Caption';
   String _tone = 'luxury';
@@ -53,6 +56,14 @@ class _BulkSchedulerScreenState extends ConsumerState<BulkSchedulerScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // ── Instagram account selector ───────────────────────────────────
+          _buildSectionHeader('Instagram Account'),
+          _AccountSelector(
+            selected: _selectedAccount,
+            onChanged: (account) => setState(() => _selectedAccount = account),
+          ),
+          const SizedBox(height: 8),
+
           _buildSectionHeader('Schedule Settings'),
           _buildDatePicker('Start Date', _startDate, (date) => setState(() => _startDate = date)),
           _buildIntInput('Number of Days', _numDays, (val) => setState(() => _numDays = val)),
@@ -76,11 +87,21 @@ class _BulkSchedulerScreenState extends ConsumerState<BulkSchedulerScreen> {
 
           ElevatedButton(
             onPressed: () {
+              if (_selectedAccount == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please select an Instagram account before scheduling.'),
+                    backgroundColor: Colors.redAccent,
+                  ),
+                );
+                return;
+              }
               context.go('/bulk-scheduler-preview', extra: {
                 'selectedMedia': selectedMedia,
                 'startDate': _startDate, 'numDays': _numDays, 'postsPerDay': _postsPerDay,
                 'startTime': _startTime, 'endTime': _endTime, 'captionMode': _captionMode,
                 'captionPreset': _captionPreset, 'tone': _tone, 'language': _language, 'cta': _cta,
+                'selectedAccountId': _selectedAccount!.id,  // ← pass account ID
               });
             },
             child: const Text('Generate & Preview'),
@@ -96,3 +117,56 @@ class _BulkSchedulerScreenState extends ConsumerState<BulkSchedulerScreen> {
   Widget _buildTimePicker(String label, TimeOfDay time, ValueChanged<TimeOfDay> onChanged) => ListTile(title: Text(label), subtitle: Text(time.format(context)), onTap: () async {final newTime = await showTimePicker(context: context, initialTime: time); if (newTime != null) onChanged(newTime);});
   Widget _buildDropdown(String label, String value, List<String> items, ValueChanged<String?> onChanged) => DropdownButtonFormField<String>(value: value, items: items.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(), onChanged: onChanged, decoration: InputDecoration(labelText: label));
 }
+
+// ── Account selector widget ──────────────────────────────────────────────────
+
+class _AccountSelector extends ConsumerWidget {
+  final SocialAccount? selected;
+  final ValueChanged<SocialAccount?> onChanged;
+  const _AccountSelector({required this.selected, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final accountsAsync = ref.watch(socialAccountsProvider);
+    return accountsAsync.when(
+      loading: () => const LinearProgressIndicator(),
+      error: (e, _) => Text('Failed to load accounts: $e',
+          style: const TextStyle(color: Colors.redAccent)),
+      data: (accounts) {
+        if (accounts.isEmpty) {
+          return Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.4))),
+            child: const Row(children: [
+              Icon(Icons.warning_amber_outlined, color: Colors.orange, size: 18),
+              SizedBox(width: 8),
+              Expanded(child: Text('No Instagram accounts connected. Go to Settings → Instagram Accounts.', style: TextStyle(fontSize: 13))),
+            ]),
+          );
+        }
+        // Auto-select if only one account
+        if (selected == null && accounts.length == 1) {
+          WidgetsBinding.instance.addPostFrameCallback((_) => onChanged(accounts.first));
+        }
+        return DropdownButtonFormField<SocialAccount>(
+          value: accounts.contains(selected) ? selected : null,
+          items: accounts
+              .map((a) => DropdownMenuItem(
+                    value: a,
+                    child: Text(a.displayName, overflow: TextOverflow.ellipsis),
+                  ))
+              .toList(),
+          onChanged: onChanged,
+          decoration: const InputDecoration(
+            labelText: 'Post to account',
+            prefixIcon: Icon(Icons.camera_alt_outlined),
+          ),
+        );
+      },
+    );
+  }
+}
+

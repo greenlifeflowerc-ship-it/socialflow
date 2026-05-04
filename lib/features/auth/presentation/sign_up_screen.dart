@@ -59,6 +59,7 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
     });
 
     try {
+
       final response = await Supabase.instance.client.auth.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text,

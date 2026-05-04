@@ -3,11 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
+import 'config/app_config.dart';
 import 'models/media_asset.dart';
-import 'services/settings_service.dart';
 import 'services/version_check_service.dart';
-
-bool supabaseInitialized = false;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,19 +15,13 @@ Future<void> main() async {
   Hive.registerAdapter(MediaTypeAdapter());
   await Hive.openBox<MediaAsset>('mediaLibrary');
 
-  final settings = await SettingsService().loadSettings();
+  await Supabase.initialize(
+    url: AppConfig.supabaseUrl,
+    anonKey: AppConfig.supabaseAnonKey,
+  );
 
-  final supabaseUrl = settings.supabaseUrl ?? '';
-  final supabaseAnonKey = settings.supabaseAnonKey ?? '';
-
-  if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
-    await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
-    supabaseInitialized = true;
-  }
-
-  if (settings.backendUrl != null && settings.backendUrl!.isNotEmpty) {
-    await performVersionCheck(settings.backendUrl!);
-  }
+  // Non-blocking version check — failure is silently ignored.
+  await performVersionCheck(AppConfig.backendUrl);
 
   runApp(const ProviderScope(child: MyApp()));
 }

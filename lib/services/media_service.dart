@@ -49,11 +49,8 @@ class MediaNotifier extends StateNotifier<List<MediaAsset>> {
   }
 
   Future<void> deleteMedia(String assetId) async {
-    try {
-      await _apiClient.deleteMedia(assetId);
-    } catch (_) {
-      // Still remove locally even if backend sync fails.
-    }
+    // Throws on backend failure — let callers handle errors.
+    await _apiClient.deleteMedia(assetId);
     await _mediaBox.delete(assetId);
   }
 

@@ -1,14 +1,8 @@
-import 'dart:convert';
 import 'ai_model.dart';
+import 'brand_profile.dart';
 
 class AppSettings {
-  final String? supabaseUrl;
-  final String? supabaseAnonKey;
-  final String? backendUrl;
-  final String? metaToken;
-  final String? instagramId;
-
-  // AI Settings
+  // AI Settings (persisted – user's own AI provider keys)
   final String? geminiApiKey;
   final String? openAiApiKey;
   final String? openRouterApiKey;
@@ -21,26 +15,22 @@ class AppSettings {
 
   // Runtime connection status (never persisted)
   final bool backendConnected;
-  final bool metaConnected;
-  final bool geminiConnected;
+  final bool instagramConnected;
   final String lastBackendMessage;
-  final String lastMetaMessage;
-  final String lastGeminiMessage;
+  final String lastInstagramMessage;
 
   // Appearance (persisted)
   final String language;
   final String selectedTheme;
 
-  // Meta sync preferences (persisted)
+  // Sync preferences (persisted)
   final bool isMetaInboxEnabled;
   final bool isMetaCommentsEnabled;
 
+  // AI Brand Profile (persisted)
+  final BrandProfile brandProfile;
+
   AppSettings({
-    this.supabaseUrl,
-    this.supabaseAnonKey,
-    this.backendUrl,
-    this.metaToken,
-    this.instagramId,
     this.geminiApiKey,
     this.openAiApiKey,
     this.openRouterApiKey,
@@ -51,23 +41,17 @@ class AppSettings {
     this.availableModels = const [],
     this.lastModelsRefreshAt,
     this.backendConnected = false,
-    this.metaConnected = false,
-    this.geminiConnected = false,
+    this.instagramConnected = false,
     this.lastBackendMessage = 'Not tested',
-    this.lastMetaMessage = 'Not tested',
-    this.lastGeminiMessage = 'Not tested',
+    this.lastInstagramMessage = 'Not connected',
     this.language = 'en',
     this.selectedTheme = 'midnight',
     this.isMetaInboxEnabled = false,
     this.isMetaCommentsEnabled = false,
-  });
+    BrandProfile? brandProfile,
+  }) : brandProfile = brandProfile ?? const BrandProfile();
 
   AppSettings copyWith({
-    String? supabaseUrl,
-    String? supabaseAnonKey,
-    String? backendUrl,
-    String? metaToken,
-    String? instagramId,
     String? geminiApiKey,
     String? openAiApiKey,
     String? openRouterApiKey,
@@ -78,22 +62,16 @@ class AppSettings {
     List<AiModel>? availableModels,
     DateTime? lastModelsRefreshAt,
     bool? backendConnected,
-    bool? metaConnected,
-    bool? geminiConnected,
+    bool? instagramConnected,
     String? lastBackendMessage,
-    String? lastMetaMessage,
-    String? lastGeminiMessage,
+    String? lastInstagramMessage,
     String? language,
     String? selectedTheme,
     bool? isMetaInboxEnabled,
     bool? isMetaCommentsEnabled,
+    BrandProfile? brandProfile,
   }) {
     return AppSettings(
-      supabaseUrl: supabaseUrl ?? this.supabaseUrl,
-      supabaseAnonKey: supabaseAnonKey ?? this.supabaseAnonKey,
-      backendUrl: backendUrl ?? this.backendUrl,
-      metaToken: metaToken ?? this.metaToken,
-      instagramId: instagramId ?? this.instagramId,
       geminiApiKey: geminiApiKey ?? this.geminiApiKey,
       openAiApiKey: openAiApiKey ?? this.openAiApiKey,
       openRouterApiKey: openRouterApiKey ?? this.openRouterApiKey,
@@ -104,51 +82,43 @@ class AppSettings {
       availableModels: availableModels ?? this.availableModels,
       lastModelsRefreshAt: lastModelsRefreshAt ?? this.lastModelsRefreshAt,
       backendConnected: backendConnected ?? this.backendConnected,
-      metaConnected: metaConnected ?? this.metaConnected,
-      geminiConnected: geminiConnected ?? this.geminiConnected,
+      instagramConnected: instagramConnected ?? this.instagramConnected,
       lastBackendMessage: lastBackendMessage ?? this.lastBackendMessage,
-      lastMetaMessage: lastMetaMessage ?? this.lastMetaMessage,
-      lastGeminiMessage: lastGeminiMessage ?? this.lastGeminiMessage,
+      lastInstagramMessage: lastInstagramMessage ?? this.lastInstagramMessage,
       language: language ?? this.language,
       selectedTheme: selectedTheme ?? this.selectedTheme,
       isMetaInboxEnabled: isMetaInboxEnabled ?? this.isMetaInboxEnabled,
       isMetaCommentsEnabled: isMetaCommentsEnabled ?? this.isMetaCommentsEnabled,
+      brandProfile: brandProfile ?? this.brandProfile,
     );
   }
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
     return AppSettings(
-      supabaseUrl: json['supabaseUrl'],
-      supabaseAnonKey: json['supabaseAnonKey'],
-      backendUrl: json['backendUrl'],
-      metaToken: json['metaToken'],
-      instagramId: json['instagramId'],
-      geminiApiKey: json['geminiApiKey'],
-      openAiApiKey: json['openAiApiKey'],
-      openRouterApiKey: json['openRouterApiKey'],
-      selectedAiProvider: json['selectedAiProvider'] ?? 'gemini',
-      selectedTextModel: json['selectedTextModel'],
-      selectedImageModel: json['selectedImageModel'],
-      selectedVideoModel: json['selectedVideoModel'],
+      geminiApiKey: json['geminiApiKey'] as String?,
+      openAiApiKey: json['openAiApiKey'] as String?,
+      openRouterApiKey: json['openRouterApiKey'] as String?,
+      selectedAiProvider: json['selectedAiProvider'] as String? ?? 'gemini',
+      selectedTextModel: json['selectedTextModel'] as String?,
+      selectedImageModel: json['selectedImageModel'] as String?,
+      selectedVideoModel: json['selectedVideoModel'] as String?,
       availableModels: (json['availableModels'] as List? ?? [])
-          .map((m) => AiModel.fromJson(m))
+          .map((m) => AiModel.fromJson(m as Map<String, dynamic>))
           .toList(),
       lastModelsRefreshAt: json['lastModelsRefreshAt'] != null
-          ? DateTime.tryParse(json['lastModelsRefreshAt'])
+          ? DateTime.tryParse(json['lastModelsRefreshAt'].toString())
           : null,
-      language: json['language'] ?? 'en',
-      selectedTheme: json['selectedTheme'] ?? 'midnight',
-      isMetaInboxEnabled: json['isMetaInboxEnabled'] ?? false,
-      isMetaCommentsEnabled: json['isMetaCommentsEnabled'] ?? false,
+      language: json['language'] as String? ?? 'en',
+      selectedTheme: json['selectedTheme'] as String? ?? 'midnight',
+      isMetaInboxEnabled: json['isMetaInboxEnabled'] as bool? ?? false,
+      isMetaCommentsEnabled: json['isMetaCommentsEnabled'] as bool? ?? false,
+      brandProfile: json['brandProfile'] != null
+          ? BrandProfile.fromJson(json['brandProfile'] as Map<String, dynamic>)
+          : null,
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'supabaseUrl': supabaseUrl,
-        'supabaseAnonKey': supabaseAnonKey,
-        'backendUrl': backendUrl,
-        'metaToken': metaToken,
-        'instagramId': instagramId,
         'geminiApiKey': geminiApiKey,
         'openAiApiKey': openAiApiKey,
         'openRouterApiKey': openRouterApiKey,
@@ -162,5 +132,6 @@ class AppSettings {
         'selectedTheme': selectedTheme,
         'isMetaInboxEnabled': isMetaInboxEnabled,
         'isMetaCommentsEnabled': isMetaCommentsEnabled,
+        'brandProfile': brandProfile.toJson(),
       };
 }

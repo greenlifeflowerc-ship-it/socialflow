@@ -6,7 +6,8 @@ plugins {
 }
 
 android {
-    namespace = "com.fc.socialflow"
+    namespace = "" +
+            ""
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 

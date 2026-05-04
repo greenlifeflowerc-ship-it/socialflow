@@ -31,6 +31,9 @@ final settingsProvider = StateNotifierProvider<SettingsNotifier, AppSettings>((r
   return SettingsNotifier(ref.watch(settingsServiceProvider));
 });
 
+/// Convenient derived provider — any widget can watch this to get the current language code.
+final languageProvider = Provider<String>((ref) => ref.watch(settingsProvider).language);
+
 class SettingsNotifier extends StateNotifier<AppSettings> {
   final SettingsService _service;
 

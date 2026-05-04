@@ -53,8 +53,20 @@ class _BulkSchedulePreviewScreenState extends ConsumerState<BulkSchedulePreviewS
   }
 
   Future<void> _scheduleAll() async {
+    // Validate account before touching the network
+    final selectedAccountId = widget.scheduleSettings['selectedAccountId'] as String?;
+    if (selectedAccountId == null || selectedAccountId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No Instagram account selected. Go back and choose one.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
     setState(() => _isScheduling = true);
-    await ref.read(_provider.notifier).scheduleAllPosts();
+    await ref.read(_provider.notifier).scheduleAllPosts(socialAccountId: selectedAccountId);
     if (mounted) setState(() => _isScheduling = false);
     
     // Check for failures before navigating

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../services/settings_service.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/l10n/app_strings.dart';
 import 'configurations_screen.dart';
 
@@ -30,6 +31,16 @@ class SettingsScreen extends ConsumerWidget {
                 context,
                 MaterialPageRoute(builder: (_) => const ConfigurationsScreen()),
               ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.sync_alt, color: Colors.blueAccent),
+              title: Text(S.tr('directInstagram', lang)),
+              subtitle: Text(S.tr('directInstagramSub', lang)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/settings/instagram-accounts'),
             ),
           ),
           const SizedBox(height: 24),
@@ -65,6 +76,17 @@ class SettingsScreen extends ConsumerWidget {
                   onTap: () => _showThemePicker(context, ref, settings.selectedTheme, lang),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 32),
+          _SectionTitle(title: S.tr('aboutMe', lang)),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.account_circle_outlined, color: Color(0xFFD4AF37)),
+              title: Text(S.tr('aboutMe', lang)),
+              subtitle: Text(S.tr('aboutMeSub', lang)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/settings/about'),
             ),
           ),
           const SizedBox(height: 32),
