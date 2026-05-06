@@ -1,12 +1,16 @@
+import 'dart:typed_data' show Uint8List;
+
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:image_picker/image_picker.dart' show XFile;
 import '../../../core/l10n/app_strings.dart';
 import '../../../models/media_asset.dart';
 import '../../../services/accounts_service.dart';
+import '../../../services/api_client.dart';
 import '../../../services/media_service.dart';
 import '../../../services/post_service.dart';
 import '../../../services/upload_service.dart';
@@ -37,8 +41,26 @@ class MediaLibraryScreen extends ConsumerStatefulWidget {
 
 class _MediaLibraryScreenState extends ConsumerState<MediaLibraryScreen> {
   Future<void> _pickAndUpload(BuildContext context) async {
-    final List<XFile> files = await ImagePicker().pickMultiImage();
-    if (files.isEmpty) return;
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      type: FileType.custom,
+      allowedExtensions: ['jpg', 'jpeg', 'png', 'webp', 'heic', 'mp4', 'mov', 'm4v'],
+      withData: kIsWeb, // needed for web byte access
+    );
+    if (result == null || result.files.isEmpty) return;
+
+    final files = result.files.map((f) {
+      if (kIsWeb || f.path == null) {
+        // Web: use bytes
+        return XFile.fromData(
+          f.bytes ?? Uint8List(0),
+          name: f.name,
+          mimeType: ApiClient.inferMimeType(f.name),
+        );
+      }
+      return XFile(f.path!, name: f.name);
+    }).toList();
+
     ref.read(uploadQueueProvider.notifier).addFilesToQueue(files);
     if (mounted) context.go('/upload-queue');
   }
@@ -231,7 +253,7 @@ class _MediaCardState extends ConsumerState<_MediaCard> {
   MediaAsset get asset => widget.asset;
   String get lang => widget.lang;
 
-  Future<void> _publishNow(BuildContext context) async {
+  Future<void> _publishNow(BuildContext context, {String? mediaTypeOverride}) async {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     final currentLang = ref.read(settingsProvider).language;
 
@@ -318,7 +340,8 @@ class _MediaCardState extends ConsumerState<_MediaCard> {
         'social_account_id': socialAccountId,
         'media_asset_id': asset.id,
         'caption': finalCaption.isEmpty ? '' : finalCaption,
-        'media_type': asset.mediaType.name, // 'image' or 'video'
+        // Use override (for Reels) or fall back to asset's resource type.
+        'media_type': mediaTypeOverride ?? asset.mediaType.name,
       };
 
       debugPrint('PUBLISH NOW PAYLOAD: $body');
@@ -421,6 +444,7 @@ class _MediaCardState extends ConsumerState<_MediaCard> {
   }
 
   void _showMenu(BuildContext context) {
+    final isVideo = asset.mediaType == MediaType.video;
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -429,22 +453,78 @@ class _MediaCardState extends ConsumerState<_MediaCard> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // ── Drag handle ──────────────────────────────────────────────
+            Container(
+              width: 40, height: 4,
+              margin: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                  color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+            ),
+
+            // ── Publish Now options ──────────────────────────────────────
+            if (isVideo) ...[
+              ListTile(
+                leading: _publishing
+                    ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.videocam_outlined),
+                title: Text(S.tr('postTypeVideo', lang)),
+                subtitle: Text(S.tr('publishNow', lang)),
+                enabled: !_publishing,
+                onTap: _publishing
+                    ? null
+                    : () {
+                        Navigator.pop(sheetCtx);
+                        _publishNow(context, mediaTypeOverride: 'video');
+                      },
+              ),
+              ListTile(
+                leading: _publishing
+                    ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.movie_creation_outlined),
+                title: Text(S.tr('postTypeReel', lang)),
+                subtitle: Text(S.tr('publishNow', lang)),
+                enabled: !_publishing,
+                onTap: _publishing
+                    ? null
+                    : () {
+                        Navigator.pop(sheetCtx);
+                        _publishNow(context, mediaTypeOverride: 'reels');
+                      },
+              ),
+            ] else
+              ListTile(
+                leading: _publishing
+                    ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.image_outlined),
+                title: Text(S.tr('postTypeFeed', lang)),
+                subtitle: Text(S.tr('publishNow', lang)),
+                enabled: !_publishing,
+                onTap: _publishing
+                    ? null
+                    : () {
+                        Navigator.pop(sheetCtx);
+                        _publishNow(context, mediaTypeOverride: 'image');
+                      },
+              ),
+
+            // ── Story — available for both image and video ───────────────
             ListTile(
               leading: _publishing
-                  ? const SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.send),
-              title: Text(S.tr('publishNow', lang)),
+                  ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.amp_stories_outlined),
+              title: Text(S.tr('postTypeStory', lang)),
+              subtitle: Text(S.tr('publishNow', lang)),
               enabled: !_publishing,
               onTap: _publishing
                   ? null
                   : () {
                       Navigator.pop(sheetCtx);
-                      _publishNow(context);
+                      _publishNow(context, mediaTypeOverride: 'story');
                     },
             ),
+
+            const Divider(height: 1),
+
             ListTile(
               leading: const Icon(Icons.auto_awesome),
               title: Text(S.tr('generateCaption', lang)),
@@ -453,14 +533,15 @@ class _MediaCardState extends ConsumerState<_MediaCard> {
                 context.push('/post-editor', extra: asset);
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.edit),
-              title: Text(S.tr('aiEdit', lang)),
-              onTap: () {
-                Navigator.pop(sheetCtx);
-                context.push('/ai/single-edit', extra: asset);
-              },
-            ),
+            if (!isVideo)
+              ListTile(
+                leading: const Icon(Icons.edit),
+                title: Text(S.tr('aiEdit', lang)),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  context.push('/ai/single-edit', extra: asset);
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.delete, color: Colors.red),
               title: Text(S.tr('delete', lang),
@@ -481,6 +562,12 @@ class _MediaCardState extends ConsumerState<_MediaCard> {
     final selection = ref.watch(selectionProvider);
     final isSelected = selection.contains(asset.id);
     final primaryColor = Theme.of(context).colorScheme.primary;
+    final isVideo = asset.mediaType == MediaType.video;
+
+    // For video: prefer explicit thumbnail (imageUrl); for image: imageUrl or mediaUrl.
+    final displayUrl = isVideo
+        ? asset.imageUrl // may be null if backend didn't generate a thumbnail
+        : (asset.imageUrl ?? asset.mediaUrl);
 
     return GestureDetector(
       onTap: () {
@@ -503,25 +590,91 @@ class _MediaCardState extends ConsumerState<_MediaCard> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              CachedNetworkImage(
-                imageUrl: asset.imageUrl ?? asset.mediaUrl ?? '',
-                fit: BoxFit.cover,
-                placeholder: (context, url) => Container(
-                  color: Theme.of(context).colorScheme.surface,
-                  child: const Center(
-                      child: CircularProgressIndicator(strokeWidth: 2)),
-                ),
-                errorWidget: (c, u, e) => Container(
+              // ── Background: thumbnail or placeholder ──────────────────
+              if (displayUrl != null && displayUrl.isNotEmpty)
+                CachedNetworkImage(
+                  imageUrl: displayUrl,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Container(
+                    color: Theme.of(context).colorScheme.surface,
+                    child: const Center(
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  ),
+                  errorWidget: (c, u, e) => isVideo
+                      ? _VideoPlaceholder(asset: asset)
+                      : Container(
+                          color: Theme.of(context).colorScheme.surface,
+                          child: const Icon(Icons.broken_image_outlined),
+                        ),
+                )
+              else if (isVideo)
+                _VideoPlaceholder(asset: asset)
+              else
+                Container(
                   color: Theme.of(context).colorScheme.surface,
                   child: const Icon(Icons.broken_image_outlined),
                 ),
+
+              // ── VIDEO / IMAGE badge ────────────────────────────────────
+              Positioned(
+                bottom: 4,
+                left: 4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.75),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    isVideo ? 'VIDEO' : 'IMAGE',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
               ),
+
+              // ── "Generated with music" badge ───────────────────────────
+              if (asset.id.startsWith('rendered_'))
+                Positioned(
+                  bottom: 4,
+                  right: 4,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.purple.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.library_music_outlined,
+                            color: Colors.white, size: 9),
+                        SizedBox(width: 2),
+                        Text('MUSIC',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+
+              // ── Selection overlay ──────────────────────────────────────
               if (isSelected)
                 Container(
-                  color: primaryColor.withOpacity(0.4),
+                  color: primaryColor.withValues(alpha: 0.4),
                   child: const Icon(Icons.check_circle,
                       color: Colors.white, size: 32),
                 ),
+
+              // ── Uploading/publishing overlay ───────────────────────────
               if (_publishing)
                 Container(
                   color: Colors.black45,
@@ -530,6 +683,8 @@ class _MediaCardState extends ConsumerState<_MediaCard> {
                         strokeWidth: 2, color: Colors.white),
                   ),
                 ),
+
+              // ── Published badge ────────────────────────────────────────
               Positioned(
                 top: 4,
                 right: 4,
@@ -544,10 +699,12 @@ class _MediaCardState extends ConsumerState<_MediaCard> {
                       )
                     : const SizedBox.shrink(),
               ),
-              if (asset.mediaType == MediaType.video)
+
+              // ── Play icon for video (only when not selected) ───────────
+              if (isVideo && !isSelected)
                 const Center(
                     child: Icon(Icons.play_circle_outline,
-                        color: Colors.white, size: 32)),
+                        color: Colors.white, size: 36)),
             ],
           ),
         ),
@@ -555,3 +712,42 @@ class _MediaCardState extends ConsumerState<_MediaCard> {
     );
   }
 }
+
+/// A dark placeholder shown in the media grid for video assets
+/// that have no thumbnail URL yet.
+class _VideoPlaceholder extends StatelessWidget {
+  final MediaAsset asset;
+  const _VideoPlaceholder({required this.asset});
+
+  @override
+  Widget build(BuildContext context) {
+    // Try to get a short filename from the video URL.
+    final name = asset.fileName
+        ?? asset.videoUrl?.split('/').last
+        ?? asset.mediaUrl?.split('/').last;
+    return Container(
+      color: const Color(0xFF1C1C1E),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.video_library_outlined,
+              color: Color(0xFFD4AF37), size: 32),
+          if (name != null) ...[
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text(
+                name,
+                style: const TextStyle(color: Colors.white38, fontSize: 10),
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+

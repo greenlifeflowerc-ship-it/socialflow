@@ -5,12 +5,23 @@ import axios from "axios";
 import cron from "node-cron";
 import multer from "multer";
 import fs from "fs";
+import { createWriteStream } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import { fileURLToPath } from "url";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegStatic from "ffmpeg-static";
 
 dotenv.config();
+
+// Set ffmpeg binary path (ffmpeg-static provides the binary for current platform)
+try {
+  ffmpeg.setFfmpegPath(ffmpegStatic);
+  console.log("[ffmpeg] Binary path:", ffmpegStatic);
+} catch (e) {
+  console.warn("[ffmpeg] Could not set ffmpeg path:", e.message);
+}
 
 const app = express();
 
@@ -39,7 +50,21 @@ app.use("/uploads", express.static(uploadsDir));
 const upload = multer({
   dest: uploadsDir,
   limits: {
-    fileSize: 25 * 1024 * 1024
+    fileSize: 200 * 1024 * 1024  // 200MB — needed for video uploads
+  }
+});
+
+// Separate multer instance for audio files (mp3, m4a, wav, aac)
+const audioUpload = multer({
+  dest: uploadsDir,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if ([".mp3", ".m4a", ".wav", ".aac"].includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only audio files are allowed: mp3, m4a, wav, aac."));
+    }
   }
 });
 
@@ -48,6 +73,8 @@ const upload = multer({
 const posts = [];
 const autoReplyRules = [];
 const webhookEvents = [];
+// In-memory audio asset index (maps id → metadata)
+const audioAssets = {};
 
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
@@ -142,6 +169,114 @@ async function publishToInstagram({ imageUrl, caption }) {
     publishId: publishResponse.data?.id
   };
 }
+
+// ── Enhanced publisher that supports image / reels / story ────────────────────
+// mediaType: "image" | "reels" | "story"
+// Pass mediaUrl (the Cloudinary secure_url), caption, igUserId, accessToken.
+async function createInstagramContainer({
+  mediaUrl,
+  imageUrl,
+  videoUrl,
+  caption,
+  mediaType,          // "image" | "reels" | "story"
+  isVideoMedia,       // true when the asset is a video file
+  igUserId,
+  accessToken
+}) {
+  const baseUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${igUserId || IG_USER_ID}/media`;
+  const token = accessToken || META_ACCESS_TOKEN;
+
+  const params = { access_token: token };
+
+  switch (mediaType) {
+    case "reels":
+    case "video":
+      // Instagram Graph API: upload as REELS
+      params.video_url = videoUrl || mediaUrl;
+      params.media_type = "REELS";
+      params.caption = caption || "";
+      break;
+
+    case "story":
+      // Stories: image or video depending on the asset
+      if (isVideoMedia) {
+        params.video_url = videoUrl || mediaUrl;
+        params.media_type = "STORIES";
+      } else {
+        params.image_url = imageUrl || mediaUrl;
+        params.media_type = "STORIES";
+      }
+      break;
+
+    default:
+      // Feed image post (default)
+      params.image_url = imageUrl || mediaUrl;
+      params.caption = caption || "";
+      break;
+  }
+
+  console.log(`[Instagram] Creating container: media_type=${mediaType}, is_video=${isVideoMedia}`);
+  console.log(`[Instagram] Container params (no token):`, { ...params, access_token: "***" });
+
+  const response = await axios.post(baseUrl, null, { params });
+  const creationId = response.data?.id;
+  if (!creationId) throw new Error("Meta did not return creation_id.");
+
+  // For video/reels/stories-video, container must be polled until ready before publishing
+  if (params.video_url) {
+    await pollContainerStatus({ creationId, accessToken: token });
+  }
+
+  return creationId;
+}
+
+// Poll container status until STATUS === "FINISHED" or ERROR
+async function pollContainerStatus({ creationId, accessToken, maxWaitMs = 120_000 }) {
+  const start = Date.now();
+  const pollUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${creationId}`;
+  while (Date.now() - start < maxWaitMs) {
+    const resp = await axios.get(pollUrl, {
+      params: { fields: "status_code", access_token: accessToken }
+    });
+    const status = resp.data?.status_code;
+    console.log(`[Instagram] Container ${creationId} status: ${status}`);
+    if (status === "FINISHED") return;
+    if (status === "ERROR" || status === "EXPIRED") throw new Error(`Container ${creationId} failed with status: ${status}`);
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+  throw new Error("Container readiness timed out after 120 seconds.");
+}
+
+// Publish a ready container
+async function publishContainer({ creationId, igUserId, accessToken }) {
+  const publishUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${igUserId || IG_USER_ID}/media_publish`;
+  const response = await axios.post(publishUrl, null, {
+    params: {
+      creation_id: creationId,
+      access_token: accessToken || META_ACCESS_TOKEN
+    }
+  });
+  return response.data?.id;
+}
+
+// ── Helper: download a URL to a temp file path ────────────────────────────────
+async function downloadToTemp(url, destPath) {
+  const response = await axios({ url, method: "GET", responseType: "stream" });
+  return new Promise((resolve, reject) => {
+    const writer = createWriteStream(destPath);
+    response.data.pipe(writer);
+    writer.on("finish", resolve);
+    writer.on("error", reject);
+  });
+}
+
+// ── Aspect ratio presets (width × height) ─────────────────────────────────────
+const ASPECT_PRESETS = {
+  "9:16": { width: 1080, height: 1920 }, // story / reels
+  "1:1":  { width: 1080, height: 1080 }, // square
+  "4:5":  { width: 1080, height: 1350 }, // portrait feed
+};
+function getPreset(ratio) { return ASPECT_PRESETS[ratio] || ASPECT_PRESETS["9:16"]; }
 
 async function generateWithGemini(prompt, modelName = "gemini-1.5-flash") {
   requireGeminiConfig();
@@ -336,6 +471,66 @@ app.post("/api/meta/publish-now", async (req, res) => {
       ok: false,
       error: error.response?.data || error.message
     });
+  }
+});
+
+// ── /api/posts/publish-now — supports image / reels / story ──────────────────
+// Flutter app sends: { social_account_id, media_asset_id, caption, media_type }
+// media_type: "image" | "video" | "reels" | "story"
+
+app.post("/api/posts/publish-now", async (req, res) => {
+  try {
+    requireMetaConfig();
+
+    const mediaAssetId = req.body.media_asset_id;
+    const caption      = req.body.caption || "";
+    const mediaType    = req.body.media_type || "image"; // "image"|"reels"|"story"
+
+    if (!mediaAssetId) {
+      return res.status(400).json({ ok: false, error: "media_asset_id is required." });
+    }
+
+    // Look up the media asset in uploads directory
+    const allFiles = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
+    const filename = allFiles.find((f) => {
+      const base = path.basename(f, path.extname(f));
+      return base === mediaAssetId || f.startsWith(mediaAssetId);
+    });
+
+    if (!filename) {
+      return res.status(404).json({ ok: false, error: "Media asset not found." });
+    }
+
+    const ext = path.extname(filename).toLowerCase();
+    const isVideoFile = [".mp4", ".mov", ".avi", ".webm"].includes(ext);
+    const publicUrl = `${getBaseUrl(req)}/uploads/${filename}`;
+
+    const creationId = await createInstagramContainer({
+      mediaUrl: publicUrl,
+      imageUrl: isVideoFile ? null : publicUrl,
+      videoUrl: isVideoFile ? publicUrl : null,
+      caption,
+      mediaType,
+      isVideoMedia: isVideoFile,
+      igUserId: IG_USER_ID,
+      accessToken: META_ACCESS_TOKEN
+    });
+
+    const publishId = await publishContainer({
+      creationId,
+      igUserId: IG_USER_ID,
+      accessToken: META_ACCESS_TOKEN
+    });
+
+    console.log(`[publish-now] Published ${mediaType} post: ${publishId}`);
+    res.json({
+      ok: true,
+      result: { creationId, publishId, mediaType }
+    });
+  } catch (error) {
+    const msg = error.response?.data?.error?.message || error.message || "Publish failed.";
+    console.error("[publish-now] Error:", msg);
+    res.status(500).json({ ok: false, error: msg });
   }
 });
 
@@ -695,6 +890,194 @@ app.delete("/api/media/:id", (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// ── Audio upload ──────────────────────────────────────────────────────────────
+
+app.post("/api/media/audio/upload", audioUpload.single("file"), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "Audio file is required." });
+    }
+    const ext = path.extname(req.file.originalname || "").toLowerCase() || ".mp3";
+    const baseId = `audio_${req.file.filename}`;
+    const newFilename = `${baseId}${ext}`;
+    const newPath = path.join(uploadsDir, newFilename);
+    fs.renameSync(req.file.path, newPath);
+
+    const publicUrl = `${getBaseUrl(req)}/uploads/${newFilename}`;
+    audioAssets[baseId] = {
+      id: baseId,
+      filename: newFilename,
+      originalName: req.file.originalname,
+      path: newPath,
+      url: publicUrl,
+      resource_type: "audio"
+    };
+
+    console.log(`[audio-upload] Saved: ${newFilename}`);
+    res.json({
+      ok: true,
+      asset: {
+        id: baseId,
+        media_url: publicUrl,
+        secure_url: publicUrl,
+        resource_type: "audio",
+        original_name: req.file.originalname
+      }
+    });
+  } catch (err) {
+    console.error("[audio-upload] Error:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Render media with audio ───────────────────────────────────────────────────
+// POST /api/media/render-with-audio
+// Body: { media_asset_id, audio_asset_id, output_type, duration_seconds, audio_mode, aspect_ratio }
+
+app.post("/api/media/render-with-audio", async (req, res) => {
+  const {
+    media_asset_id,
+    audio_asset_id,
+    output_type = "reels",   // "story" | "reels"
+    duration_seconds = 15,
+    audio_mode = "replace",  // "replace" | "mix"
+    aspect_ratio = "9:16"
+  } = req.body;
+
+  if (!media_asset_id || !audio_asset_id) {
+    return res.status(400).json({ ok: false, error: "media_asset_id and audio_asset_id are required." });
+  }
+
+  // ── Locate media file ─────────────────────────────────────────────────────
+  const allFiles = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
+  const mediaFilename = allFiles.find((f) => {
+    const base = path.basename(f, path.extname(f));
+    return base === media_asset_id || f.startsWith(media_asset_id);
+  });
+  if (!mediaFilename) {
+    return res.status(404).json({ ok: false, error: "Media asset not found for this user." });
+  }
+
+  // ── Locate audio file ─────────────────────────────────────────────────────
+  const audioMeta = audioAssets[audio_asset_id];
+  const audioFilename = audioMeta?.filename || allFiles.find((f) => f.startsWith(audio_asset_id));
+  if (!audioFilename) {
+    return res.status(404).json({ ok: false, error: "Audio asset not found for this user." });
+  }
+
+  const mediaPath = path.join(uploadsDir, mediaFilename);
+  const audioPath = typeof audioFilename === "string" && audioFilename.includes(path.sep)
+    ? audioFilename
+    : path.join(uploadsDir, audioFilename);
+
+  const preset = getPreset(aspect_ratio);
+  const duration = Number(duration_seconds) || 15;
+  const mediaExt = path.extname(mediaFilename).toLowerCase();
+  const isImageSource = [".jpg", ".jpeg", ".png", ".webp", ".heic"].includes(mediaExt);
+
+  const outputId = `rendered_${randomUUID()}`;
+  const outputFilename = `${outputId}.mp4`;
+  const outputPath = path.join(uploadsDir, outputFilename);
+
+  console.log(`[render] media=${mediaFilename}, audio=${audioFilename}, mode=${audio_mode}, isImage=${isImageSource}`);
+
+  try {
+    await new Promise((resolve, reject) => {
+      const cmd = ffmpeg();
+
+      if (isImageSource) {
+        // ── Still image → video with audio ────────────────────────────────
+        cmd
+          .input(mediaPath)
+          .inputOptions(["-loop 1"])
+          .input(audioPath)
+          .outputOptions([
+            `-t ${duration}`,
+            `-vf scale=${preset.width}:${preset.height}:force_original_aspect_ratio=decrease,pad=${preset.width}:${preset.height}:(ow-iw)/2:(oh-ih)/2:color=black`,
+            "-c:v libx264",
+            "-tune stillimage",
+            "-c:a aac",
+            "-b:a 192k",
+            "-pix_fmt yuv420p",
+            "-movflags faststart",
+            "-shortest"
+          ])
+          .output(outputPath)
+          .on("start", (cmd) => console.log("[ffmpeg] Image-to-video command:", cmd))
+          .on("end", resolve)
+          .on("error", reject)
+          .run();
+
+      } else if (audio_mode === "mix") {
+        // ── Video: mix original audio with custom audio ────────────────────
+        cmd
+          .input(mediaPath)
+          .input(audioPath)
+          .complexFilter([
+            "[0:a]volume=0.5[orig]",
+            "[1:a]volume=0.8[custom]",
+            "[orig][custom]amix=inputs=2:duration=first[aout]"
+          ])
+          .outputOptions([
+            "-map 0:v",
+            "-map [aout]",
+            "-c:v copy",
+            "-c:a aac",
+            "-b:a 192k",
+            "-movflags faststart"
+          ])
+          .output(outputPath)
+          .on("start", (cmd) => console.log("[ffmpeg] Mix command:", cmd))
+          .on("end", resolve)
+          .on("error", reject)
+          .run();
+
+      } else {
+        // ── Video: replace audio entirely ─────────────────────────────────
+        cmd
+          .input(mediaPath)
+          .input(audioPath)
+          .outputOptions([
+            "-map 0:v",
+            "-map 1:a",
+            "-c:v copy",
+            "-c:a aac",
+            "-b:a 192k",
+            "-movflags faststart",
+            "-shortest"
+          ])
+          .output(outputPath)
+          .on("start", (cmd) => console.log("[ffmpeg] Replace-audio command:", cmd))
+          .on("end", resolve)
+          .on("error", reject)
+          .run();
+      }
+    });
+
+    const publicUrl = `${getBaseUrl(req)}/uploads/${outputFilename}`;
+    console.log(`[render] Output ready: ${outputFilename}`);
+
+    res.json({
+      ok: true,
+      asset: {
+        id: outputId,
+        media_url: publicUrl,
+        secure_url: publicUrl,
+        resource_type: "video",
+        rendered_with_audio: true,
+        output_type
+      },
+      message: "Media with music saved to your library."
+    });
+  } catch (err) {
+    console.error("[render] ffmpeg error:", err.message);
+    if (fs.existsSync(outputPath)) {
+      try { fs.unlinkSync(outputPath); } catch (_) {}
+    }
+    res.status(500).json({ ok: false, error: "Failed to render media with audio." });
   }
 });
 

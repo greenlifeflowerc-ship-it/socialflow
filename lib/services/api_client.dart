@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http_parser/http_parser.dart' show MediaType;
 import 'package:image_picker/image_picker.dart';
 import 'package:logger/logger.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide MultipartFile;
@@ -97,20 +98,62 @@ class ApiClient {
   // Media upload
   // ──────────────────────────────────────────────────────────────────────────
 
+  /// Infers the MIME type from a filename extension.
+  /// Falls back to 'application/octet-stream' for unknown types.
+  static String inferMimeType(String filename) {
+    final ext = filename.split('.').last.toLowerCase();
+    const types = {
+      'mp4':  'video/mp4',
+      'mov':  'video/quicktime',
+      'm4v':  'video/x-m4v',
+      'jpg':  'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'png':  'image/png',
+      'webp': 'image/webp',
+      'heic': 'image/heic',
+      'gif':  'image/gif',
+    };
+    return types[ext] ?? 'application/octet-stream';
+  }
+
+  /// Returns true if the file extension indicates a video.
+  static bool isVideoFile(String filename) {
+    final ext = filename.split('.').last.toLowerCase();
+    return {'mp4', 'mov', 'm4v', 'avi', 'mkv'}.contains(ext);
+  }
+
   Future<Map<String, dynamic>> uploadMedia(
     XFile file, {
     ProgressCallback? onSendProgress,
     CancelToken? cancelToken,
   }) async {
-    final formData = FormData.fromMap({
-      'file': await MultipartFile.fromFile(file.path, filename: file.name),
-    });
+    final mimeType = inferMimeType(file.name);
+    final contentType = MediaType.parse(mimeType);
+
+    debugPrint('UPLOAD MEDIA: ${file.name} | MIME: $mimeType');
+
+    MultipartFile multipartFile;
+    if (kIsWeb || file.path.isEmpty) {
+      // Web platform: read bytes directly.
+      final bytes = await file.readAsBytes();
+      multipartFile = MultipartFile.fromBytes(
+        bytes,
+        filename: file.name,
+        contentType: contentType,
+      );
+    } else {
+      multipartFile = await MultipartFile.fromFile(
+        file.path,
+        filename: file.name,
+        contentType: contentType,
+      );
+    }
+
+    final formData = FormData.fromMap({'file': multipartFile});
     final response = await _dio.post(
       '/api/media/upload',
       data: formData,
-      options: Options(
-        headers: {'Content-Type': 'multipart/form-data'},
-      ),
+      options: Options(contentType: 'multipart/form-data'),
       onSendProgress: onSendProgress,
       cancelToken: cancelToken,
     );
@@ -125,6 +168,90 @@ class ApiClient {
   }) =>
       uploadMedia(file,
           onSendProgress: onSendProgress, cancelToken: cancelToken);
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Audio upload
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /// Upload an audio file (mp3, m4a, wav, aac) to the backend.
+  /// Returns: { ok, asset: { id, media_url, secure_url, resource_type: "audio" } }
+  Future<Map<String, dynamic>> uploadAudio(
+    XFile file, {
+    ProgressCallback? onSendProgress,
+    CancelToken? cancelToken,
+  }) async {
+    final mimeType = inferMimeType(file.name);
+    final contentType = MediaType.parse(mimeType);
+
+    debugPrint('UPLOAD AUDIO: ${file.name} | MIME: $mimeType');
+
+    MultipartFile multipartFile;
+    if (kIsWeb || file.path.isEmpty) {
+      final bytes = await file.readAsBytes();
+      multipartFile = MultipartFile.fromBytes(
+        bytes,
+        filename: file.name,
+        contentType: contentType,
+      );
+    } else {
+      multipartFile = await MultipartFile.fromFile(
+        file.path,
+        filename: file.name,
+        contentType: contentType,
+      );
+    }
+
+    final formData = FormData.fromMap({'file': multipartFile});
+    try {
+      final response = await _dio.post(
+        '/api/media/audio/upload',
+        data: formData,
+        options: Options(contentType: 'multipart/form-data'),
+        onSendProgress: onSendProgress,
+        cancelToken: cancelToken,
+      );
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      debugPrint('AUDIO UPLOAD FAILED: ${e.requestOptions.uri}');
+      debugPrint('AUDIO UPLOAD STATUS: ${e.response?.statusCode}');
+      debugPrint('AUDIO UPLOAD DATA: ${e.response?.data}');
+      final data = e.response?.data;
+      final message = data is Map && data['error'] != null
+          ? data['error'].toString()
+          : e.message ?? 'Audio upload failed';
+      throw Exception(message);
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Render media with audio
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /// Render a media asset with a custom audio track via backend ffmpeg.
+  /// Body: {
+  ///   media_asset_id, audio_asset_id,
+  ///   output_type: "story"|"reels",
+  ///   duration_seconds: int,
+  ///   audio_mode: "replace"|"mix",
+  ///   aspect_ratio: "9:16"|"1:1"|"4:5"
+  /// }
+  /// Returns: { ok, asset: { id, media_url, secure_url, resource_type: "video" }, message }
+  Future<Map<String, dynamic>> renderWithAudio(Map<String, dynamic> body) async {
+    try {
+      debugPrint('RENDER WITH AUDIO PAYLOAD: $body');
+      final response = await _dio.post('/api/media/render-with-audio', data: body);
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      debugPrint('RENDER FAILED URL: ${e.requestOptions.uri}');
+      debugPrint('RENDER FAILED STATUS: ${e.response?.statusCode}');
+      debugPrint('RENDER FAILED DATA: ${e.response?.data}');
+      final data = e.response?.data;
+      final message = data is Map && data['error'] != null
+          ? data['error'].toString()
+          : 'Failed to render media with audio';
+      throw Exception(message);
+    }
+  }
 
   // ──────────────────────────────────────────────────────────────────────────
   // Posts
